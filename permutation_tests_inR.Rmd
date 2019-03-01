@@ -1,0 +1,172 @@
+---
+title: "An R Intro to Permutation Tests"
+author: "Jason Fridley"
+date: "2/27/2019"
+output: html_document
+---
+
+It is not uncommon, particularly in ecology, to be unsure of an appropriate error structure for modeling a particular dataset. This usually arises due to non-independence of observations, for example due to temporal or spatial autocorrelation, or because our test statistic is multivariate, arising from different observations of the same experimental units. Sometimes we could detect and accommodate particular error structures with complex simulations, but there is another way to test hypotheses in this situation that takes advantage of the ease of randomization in the computer age. In effect, these approaches reshuffle (or resample) your data, and ask how a particular test statistic (say, a correlation coefficient) changes. If you reshffule an aspect of your data randomly, but still get back a significant result, this is a sign that something is lurking in your data to inflate Type I error. 
+
+There are two basic flavors of these tests, plus a third that is common for simulations:
+
+**Permutation (randomization) tests** compare an observed test statistic to a population of test statistics obtained by random shuffles of your data. Inference is on the *sample*, not the underlying population.
+
+**Bootstrapping** is based on shuffling observations *with replacement*. Bootstrap inference is on the underlying *population*. In essence, you use your observations to create a 'different' sample, assuming yours are independent.
+
+**Monte carlo** procedures randomly sample from an underlying distribution (e.g., 'rnorm'). This is useful for assessing error in predictions from a complex model, for example by randomly sampling from your fitted parameters using their mean and standard error.
+
+#
+####Why use randomization tests?
+
+Randomization tests reflect the empirical distribution of the observations, and thus do not assume, for example, normal residuals, equal variance, or even independent observations (of a kind; see below). Flexibility in choosing a test statistic means randomization tests can be used for inference where an appropriate test statistic is not obvious.
+
+However, what you assume is independent about your data is critical, because how you reshuffle your data depends on which observations are independent	and which aren't.  
+
+
+####Example 1: Student's t test based on permutation instead of a normal distribution
+
+In a permutation test, our focus is on comparing some statistic (eg, mean) between samples. In this example we'll create two random vectors sampled from normal distributions, and compare their means in the normal (pun intended) way.
+```{r}
+set.seed(1079)
+x1 = rnorm(100,mean=0,sd=10)
+x2 = rnorm(80,mean=3,sd=.2)
+x = c(x1,x2)
+group = c(rep("x1",100),rep("x2",80))
+t.test(x1,x2)
+```
+This shows that the actual t statistic is -4.7405. Now we 'break the link' between an observation (x) and its group by randomly shuffing group membership with the `sample` function:
+```{r}
+group.samp = sample(group)	#randomly suffles 'group' vector
+t.test(x[group.samp=="x1"],x[group.samp=="x2"])  #same t statistic for permuted data
+```
+Because we've shuffled our labels, the t statistic is now much smaller, due to (on average) a smaller difference in means. Let's build on this idea and generate a matrix of 1000 shuffled versions of our 'group' label.
+```{r}
+per.mat = matrix(group,ncol=1000,nrow=length(x))  #initial matrix, all cols the same
+per.mat = apply(per.mat,2,function(x)sample(x))  #randomly permute each column
+```
+And now we'll automate the t statistic calculation for each permuted sample (columns of our matrix), and compare the distribution of the 1000 permuted (or *null*) t statistics to the real one (-4.7405).
+```{r}
+per.t = apply(per.mat,2,function(y) {test = t.test(x[y=="x1"],x[y=="x2"]); unlist(test["statistic"])})
+nullCI = quantile(per.t,c(.025,.975)) #middle 95% of null distribution
+hist(per.t,xlim=c(-5,5)); abline(v=-4.7405,col="blue",lwd=2); abline(v=nullCI,col="red",lty=1)
+```
+
+Our observed t value of -4.7405 is well outside the null 95% CI, so we conclude the real difference in means is too extreme to accept the null hypothesis of no difference. This is a permutation version of Student's t test. Of course, because our data were actually normal, it so happens our 95% CI associated with the permuted data (= null hypothesis) equals the inner 95th quantile of the t distribution (-2,2). You knew that.
+
+####Example 2: Bootstrapped t test
+
+In bootstrapping, we are interested in the populations we sample from, rather than just the sample themselves. Consider it a form of resampling from the population, except that we can only observe values we've already measured. In R we still use the `sample` function, but including the argument `replace=T` to allow sampling with replacement. Let's mirror Example 1 with the t statistic, but now assume our samples reflect two underlying populations, and our interest is on whether the population means differ.
+```{r}
+boot.t = rep(0,1000) #holding vector for t stats
+meandiff = rep(0,1000) #holding vector for difference in means
+for(i in 1:1000) {
+	s.x1 = sample(x1,length(x1),replace=T)
+	s.x2 = sample(x2,length(x2),replace=T)
+	meandiff[i] = mean(s.x1) - mean(s.x2) #differences in means: ignores underlying variances
+	boot.t[i] = unlist(t.test(s.x1,s.x2)["statistic"]) #incorporates underlying variances
+}
+meandiffCI = quantile(meandiff,c(.025,.975)) #middle 95% of bootstrapped distribution of mean diff
+hist(meandiff); abline(v=mean(x1) - mean(x2),col="blue",lwd=2); abline(v=meandiffCI,col="red",lty=1)
+```
+
+Our confidence interval does not overlap zero, so we reject the null hypothesis that the difference in means of the populations is zero.
+
+```{r}
+bootCI = quantile(boot.t,c(.025,.975)) #middle 95% of bootstrapped distribution of t
+hist(boot.t); abline(v=-2.2252,col="blue",lwd=2); abline(v=bootCI,col="red",lty=1)
+```
+
+This is the same bootstrap but using instead the t statistic that also incorporates the SE of both samples. Same conclusion.
+
+####Example 3: Permutation test for correlated observations (e.g., repeated measures)
+
+Correlated observations are a common motivation for permutation tests, particularly in those cases where it is unclear how to apply the correlation. The below example is a simple example of this idea, for the case when we want to compare the means of two groups, but observations include two measurement periods. Observations measured at the same time are not independent, so we can't use the usual t test. (Although we could use a paired t test.)
+````{r}
+x1.t1 = rnorm(50,mean=100,sd=10)
+x1.t2 = rnorm(50,mean=x1.t1,sd=5) #value of observation when t=2 closely correlated to observation when t=1
+plot(x1.t1,x1.t2,main="Relationship of measurements taken at t1 and t2")
+x2.t1 = rnorm(50,mean=120,sd=10)
+x2.t2 = rnorm(50,mean=x2.t1,sd=5) #ditto x2
+plot(x2.t1,x2.t2,main="Relationship of measurements taken at t1 and t2")
+````
+
+In this case, we can preserve the correlation structure by only randomizing within t=1 and t=2 (that is, values across times are independent, but dependent within each time period), but preserving the structure of the data across groups x1 and x2. The time variable is now called a 'stratum'. First we can run F tests with and without the correlation structure:
+```` {r}
+x = c(x1.t1,x1.t2,x2.t1,x2.t2)
+group = rep(c("x1","x2"),each=100)
+time = rep(rep(c("t1","t2"),each=50),2)
+summary(aov(x~group)) #overall difference in group means ignoring time
+summary(aov(x~group+Error(time))) #overall difference in group means using time as stratum (blocks)
+````
+
+Then we can compare to a permutation test that randomly shuffles x1 and x2 values separately within time periods. The below uses two different test statistics for comparison: the mean difference between x1 and x2, and the associated F statistic.
+```` {r}
+boot.F = rep(0,1000) #illustrate with F statistic this time
+meandiff = rep(0,1000) #holding vector for difference in means
+for(i in 1:1000) {
+	s.x1t1 = sample(x1.t1,length(x1.t1),replace=T)
+	s.x2t1 = sample(x2.t1,length(x2.t1),replace=T)
+	s.x1t2 = sample(x1.t2,length(x1.t2),replace=T)
+	s.x2t2 = sample(x2.t2,length(x2.t2),replace=T)
+	y = c(s.x1t1,s.x1t2,s.x2t1,s.x2t2)
+	meandiff[i] = mean(c(s.x1t1,s.x1t2)) - mean(c(s.x2t1,s.x2t2)) 
+	boot.F[i] = summary(aov(y~group))[[1]][1,4] #F stat
+}
+meandiffCI = quantile(meandiff,c(.025,.975)) #middle 95% of bootstrapped distribution of mean diff
+hist(meandiff); abline(v=mean(c(x1.t1,x1.t2)) - mean(c(x2.t1,x2.t2)),col="blue",lwd=2); abline(v=meandiffCI,col="red",lty=1)
+	#bootstrapped difference in means, allowing for temporal dependence
+
+bootFCI = quantile(boot.F,c(.025,.975)) #middle 95% of bootstrapped distribution of t
+hist(boot.F); abline(v=197.2,col="blue",lwd=2); abline(v=bootFCI,col="red",lty=1)
+	#this is a permutation form of repeated measures ANOVA
+````
+
+###Regression example: Bootstrapped goodness of fit (R^2^)
+
+Bootstrapping using random samples of your data with replacement can also be handy for estimating precision in certain test statistics that don't normally report error estimates. Consider model goodness of fit statistics like R^2^. A typical regression table will report model R^2^ and estimate the influence of sample size with the adjusted R^2^, but inferences on R^2^ are difficult without some measure of precision. Why not resample your data and create a population of R^2^s?
+
+````{r}
+library(MASS)
+mat = mvrnorm(1000,mu=c(100,100),Sigma=matrix(c(10,8,8,10),2,2)) #correlated x and y
+plot(mat)
+real.R2 = summary(lm(mat[,2]~mat[,1]))$r.square #empirical R2
+real.R2
+mat = data.frame(mat)
+#bootstrap R2
+boot.R2 = rep(0,1000)
+for(i in 1:1000) {
+	rows = sample(1:1000,replace=T) #chooses rows of mat at random, but with replacement
+	boot.R2[i] = summary(lm(X2~X1,data=mat[rows,]))$r.square #regression using bootstrapped rows
+}
+bootCI = quantile(boot.R2,c(.025,.975)) #middle 95% of bootstrapped distribution of t
+bootCI
+hist(boot.R2); abline(v=real.R2,col="blue",lwd=2); abline(v=bootCI,col="red",lty=1)
+````
+
+The above graph shows 95% confidence limits for a bootstrapped R^2^ value from the observed relationship between X and Y. Beware of the reliability of this approach with datasets of small n--the universe of values from which to sample must be reasonable in order to provide decent inference on the underlying population.
+
+####Final example: Permutation tests of significance in multivariate data 
+
+Multivariate analyses include multiple dependent variables (Ys) measured on the same sample units. One common appliation of permutation tests is for models of multivariate data that have been transformed into pairwise contrasts, such as a distance (or similarity) matrix. For example, we may be interested in whether vegetation plots that differ more in an environmental variable like soil pH also differ more in species composition. We can test the null hypothesis that species composition is unrelated to soil pH by regressing the pairwise differences in composition (Y) against those of soil pH (X), using a typical sum of squares decomposition. However, because Ys now represent pairs of plots, they are no longer independent, violating a critical assumption of linear modeling. But all is not lost: we can test our null hypothesis empirically by randomly shuffling species across plots (or vice-versa), and comparing our test statistic (eg F) to those generated by permutation. This is called a Permutational ANOVA (or PERMANOVA), and in ecology is often done with the `adonis` function in the vegan package:
+
+````{r}
+library(vegan)
+data(varespec); data(varechem)
+head(varespec) #cover values for 44 species in 24 plots
+head(varechem) #soil chemistry data for those 24 plots
+````
+This asks whether site differences in species composition (sum of squares) are related to site differences in soil calcium concentration; both response and predictors are first transformed into distance matrices:
+````{r}
+ad = adonis(varespec~varechem$Ca)
+ad; summary(ad)
+````
+
+####Helpful references
+
+Crawley, M.J. 2007. *The R Book* (Wiley). Several sections on bootstrapping fitted parameter values in linear and nonlinear regression.
+
+Fortin, M.J. & Jacquez, G.M. 2000. Randomization tests and spatially auto-correlated data. *Bulletin of the Ecological Society of America* 81: 201-205. Short overview of randomization methods.
+
+
+
+
